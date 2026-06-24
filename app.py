@@ -2,7 +2,7 @@ from flask import Flask
 import requests
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import schedule
 import time
 import threading
@@ -84,9 +84,9 @@ def save_to_sheets(data):
         print(f"Sheets Error: {e}")
 
 def fetch_and_save():
-    from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 now = datetime.now(IST)
+
     if now.weekday() < 5 and \
        (now.hour > 9 or (now.hour == 9 and now.minute >= 15)) and \
        (now.hour < 15 or (now.hour == 15 and now.minute <= 30)):
