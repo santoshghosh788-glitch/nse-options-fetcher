@@ -26,7 +26,7 @@ def get_nse_data():
     try:
         session.get("https://www.nseindia.com", headers=headers, timeout=10)
         time.sleep(2)
-        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={SYMBOL}&identifier=OPTIDX{SYMBOL}"
+        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={SYMBOL}"
         response = session.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             return response.json()
