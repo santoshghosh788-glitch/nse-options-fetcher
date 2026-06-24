@@ -82,10 +82,18 @@ def save_to_sheets(data):
             print(f"✅ {len(rows)} rows saved at {timestamp}")
     except Exception as e:
         print(f"Sheets Error: {e}")
-
 def fetch_and_save():
-IST = timezone(timedelta(hours=5, minutes=30))
-now = datetime.now(IST)
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST)
+    if now.weekday() < 5 and \
+       (now.hour > 9 or (now.hour == 9 and now.minute >= 15)) and \
+       (now.hour < 15 or (now.hour == 15 and now.minute <= 30)):
+        print(f"Fetching at {now.strftime('%H:%M:%S')}...")
+        data = get_nse_data()
+        if data:
+            save_to_sheets(data)
+    else:
+        print(f"Market closed - {now.strftime('%H:%M:%S')}")
 
     if now.weekday() < 5 and \
        (now.hour > 9 or (now.hour == 9 and now.minute >= 15)) and \
