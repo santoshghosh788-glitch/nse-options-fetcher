@@ -20,7 +20,6 @@ STRIKE_INTERVAL = 50
 
 
 def get_nearest_expiry(access_token):
-    """Nearest expiry date fetch karo"""
     url = f"https://api.upstox.com/v2/option/contract?instrument_key={INSTRUMENT_KEY}"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -41,7 +40,6 @@ def get_nearest_expiry(access_token):
 
 
 def get_upstox_option_chain(access_token, expiry_date):
-    """Upstox se option chain data fetch karo"""
     url = f"https://api.upstox.com/v2/option/chain"
     params = {
         "instrument_key": INSTRUMENT_KEY,
@@ -66,7 +64,6 @@ def get_upstox_option_chain(access_token, expiry_date):
 
 
 def save_to_sheets(option_data, expiry_date, underlying):
-    """Google Sheets mein data save karo"""
     try:
         creds_json = os.environ.get("GOOGLE_CREDS")
         creds_dict = json.loads(creds_json)
@@ -80,7 +77,6 @@ def save_to_sheets(option_data, expiry_date, underlying):
         sheet_id = os.environ.get("SHEET_ID")
         sheet = client.open_by_key(sheet_id).sheet1
 
-        # Header row check
         try:
             first_cell = sheet.cell(1, 1).value
         except:
@@ -111,49 +107,29 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_market = ce.get("market_data", {})
             pe_market = pe.get("market_data", {})
 
-            # OI values (raw — no division needed)
             ce_oi = ce_market.get("oi", 0)
             pe_oi = pe_market.get("oi", 0)
 
-            # Change in OI
             ce_chng_oi = ce_market.get("change_in_oi", 0)
             pe_chng_oi = pe_market.get("change_in_oi", 0)
 
-            # LTP — divide by 100 (Upstox paise mein deta hai)
             ce_ltp = round(ce_market.get("ltp", 0) / 100, 2)
             pe_ltp = round(pe_market.get("ltp", 0) / 100, 2)
 
-            # IV
             ce_iv = ce_market.get("iv", 0)
             pe_iv = pe_market.get("iv", 0)
 
-            # Volume
             ce_vol = ce_market.get("volume", 0)
             pe_vol = pe_market.get("volume", 0)
 
-            # PCR
             pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else 0
-
-            # Underlying — divide by 100
             underlying_price = round(underlying / 100, 2)
 
             rows.append([
-                timestamp,
-                SYMBOL,
-                expiry_date,
-                strike,
-                ce_oi,
-                ce_chng_oi,
-                ce_ltp,
-                ce_iv,
-                ce_vol,
-                pe_oi,
-                pe_chng_oi,
-                pe_ltp,
-                pe_iv,
-                pe_vol,
-                pcr,
-                underlying_price
+                timestamp, SYMBOL, expiry_date, strike,
+                ce_oi, ce_chng_oi, ce_ltp, ce_iv, ce_vol,
+                pe_oi, pe_chng_oi, pe_ltp, pe_iv, pe_vol,
+                pcr, underlying_price
             ])
 
         if rows:
@@ -235,6 +211,19 @@ def status():
     IST = timezone(timedelta(hours=5, minutes=30))
     now = datetime.now(IST)
     return f"🕐 Current IST Time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+
+@app.route("/debug")
+def debug():
+    access_token = os.environ.get("UPSTOX_ACCESS_TOKEN")
+    expiry_date = get_nearest_expiry(access_token)
+    data = get_upstox_option_chain(access_token, expiry_date)
+    if data:
+        first_item = data.get("data", [])[0]
+        ce = first_item.get("call_options", {}).get("market_data", {})
+        pe = first_item.get("put_options", {}).get("market_data", {})
+        return {"ce_fields": ce, "pe_fields": pe}
+    return {"error": "No data"}
 
 
 # Scheduler background thread
