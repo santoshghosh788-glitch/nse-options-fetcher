@@ -107,23 +107,33 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_market = ce.get("market_data", {})
             pe_market = pe.get("market_data", {})
 
+            # OI
             ce_oi = ce_market.get("oi", 0)
             pe_oi = pe_market.get("oi", 0)
 
-            ce_chng_oi = ce_market.get("change_in_oi", 0)
-            pe_chng_oi = pe_market.get("change_in_oi", 0)
+            # Change in OI = oi - prev_oi
+            ce_prev_oi = ce_market.get("prev_oi", 0)
+            pe_prev_oi = pe_market.get("prev_oi", 0)
+            ce_chng_oi = ce_oi - ce_prev_oi
+            pe_chng_oi = pe_oi - pe_prev_oi
 
-            ce_ltp = round(ce_market.get("ltp", 0) / 100, 2)
-            pe_ltp = round(pe_market.get("ltp", 0) / 100, 2)
+            # LTP — already rupees mein, divide nahi karna!
+            ce_ltp = round(ce_market.get("ltp", 0), 2)
+            pe_ltp = round(pe_market.get("ltp", 0), 2)
 
+            # IV
             ce_iv = ce_market.get("iv", 0)
             pe_iv = pe_market.get("iv", 0)
 
+            # Volume
             ce_vol = ce_market.get("volume", 0)
             pe_vol = pe_market.get("volume", 0)
 
+            # PCR
             pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else 0
-            underlying_price = round(underlying / 100, 2)
+
+            # Underlying — already rupees mein!
+            underlying_price = round(underlying, 2)
 
             rows.append([
                 timestamp, SYMBOL, expiry_date, strike,
