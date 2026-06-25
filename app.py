@@ -13,40 +13,60 @@ app = Flask(__name__)
 
 # ===================== CONFIG =====================
 SYMBOL = "NIFTY"
+INSTRUMENT_KEY = "NSE_INDEX|Nifty 50"
 ATM_RANGE = 500
 STRIKE_INTERVAL = 50
 # ==================================================
 
 
-def get_nse_data():
-    session = requests.Session()
+def get_nearest_expiry(access_token):
+    """Nearest expiry date fetch karo"""
+    url = f"https://api.upstox.com/v2/option/contract?instrument_key={INSTRUMENT_KEY}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Referer": "https://www.nseindia.com/option-chain",
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json"
     }
     try:
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        time.sleep(2)
-        session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=10)
-        time.sleep(2)
-        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={SYMBOL}"
-        response = session.get(url, headers=headers, timeout=15)
-        print(f"NSE Status: {response.status_code}")
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            expiries = sorted(set(item["expiry"] for item in data["data"]))
+            return expiries[0] if expiries else None
         else:
-            print(f"NSE Error: {response.status_code} - {response.text[:200]}")
+            print(f"Expiry Error: {response.status_code}")
             return None
     except Exception as e:
-        print(f"Fetch Error: {e}")
+        print(f"Expiry Fetch Error: {e}")
         return None
 
 
-def save_to_sheets(data):
+def get_upstox_option_chain(access_token, expiry_date):
+    """Upstox se option chain data fetch karo"""
+    url = f"https://api.upstox.com/v2/option/chain"
+    params = {
+        "instrument_key": INSTRUMENT_KEY,
+        "expiry_date": expiry_date
+    }
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        print(f"Upstox Status: {response.status_code}")
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Upstox Error: {response.status_code} - {response.text[:200]}")
+            return None
+    except Exception as e:
+        print(f"Option Chain Fetch Error: {e}")
+        return None
+
+
+def save_to_sheets(option_data, expiry_date, underlying):
+    """Google Sheets mein data save karo"""
     try:
         creds_json = os.environ.get("GOOGLE_CREDS")
         creds_dict = json.loads(creds_json)
@@ -56,49 +76,70 @@ def save_to_sheets(data):
         ]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
+
         sheet_id = os.environ.get("SHEET_ID")
         sheet = client.open_by_key(sheet_id).sheet1
-        records = data["records"]["data"]
-        expiry = data["records"]["expiryDates"][0]
-        underlying = data["records"]["underlyingValue"]
+
+        # Header row check
+        try:
+            first_cell = sheet.cell(1, 1).value
+        except:
+            first_cell = None
+
+        if not first_cell:
+            headers_row = [
+                "Timestamp", "Symbol", "Expiry", "Strike",
+                "CE OI", "CE Change OI", "CE LTP", "CE IV", "CE Volume",
+                "PE OI", "PE Change OI", "PE LTP", "PE IV", "PE Volume",
+                "PCR", "Underlying"
+            ]
+            sheet.insert_row(headers_row, 1)
+
+        IST = timezone(timedelta(hours=5, minutes=30))
+        timestamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         atm = round(underlying / STRIKE_INTERVAL) * STRIKE_INTERVAL
-        timestamp = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M:%S")
+
         rows = []
-        for item in records:
-            if item.get("expiryDate") != expiry:
-                continue
-            strike = item["strikePrice"]
+        for item in option_data:
+            strike = item.get("strike_price", 0)
             if abs(strike - atm) > ATM_RANGE:
                 continue
-            ce = item.get("CE", {})
-            pe = item.get("PE", {})
-            ce_oi = ce.get("openInterest", 0)
-            pe_oi = pe.get("openInterest", 0)
+
+            ce = item.get("call_options", {})
+            pe = item.get("put_options", {})
+
+            ce_market = ce.get("market_data", {})
+            pe_market = pe.get("market_data", {})
+
+            ce_oi = ce_market.get("oi", 0)
+            pe_oi = pe_market.get("oi", 0)
             pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else 0
+
             rows.append([
-                timestamp, SYMBOL, expiry, strike,
+                timestamp,
+                SYMBOL,
+                expiry_date,
+                strike,
                 ce_oi,
-                ce.get("changeinOpenInterest", 0),
-                ce.get("lastPrice", 0),
+                ce_market.get("volume", 0),   # CE Change OI
+                ce_market.get("ltp", 0),
+                ce_market.get("iv", 0),
+                ce_market.get("volume", 0),
                 pe_oi,
-                pe.get("changeinOpenInterest", 0),
-                pe.get("lastPrice", 0),
+                pe_market.get("volume", 0),   # PE Change OI
+                pe_market.get("ltp", 0),
+                pe_market.get("iv", 0),
+                pe_market.get("volume", 0),
                 pcr,
                 round(underlying, 2)
             ])
+
         if rows:
-            if sheet.row_count == 0 or sheet.cell(1, 1).value is None:
-                headers_row = [
-                    "Timestamp", "Symbol", "Expiry", "Strike",
-                    "CE OI", "CE Change OI", "CE LTP",
-                    "PE OI", "PE Change OI", "PE LTP",
-                    "PCR", "Underlying"
-                ]
-                sheet.insert_row(headers_row, 1)
             sheet.append_rows(rows)
             print(f"✅ {len(rows)} rows saved at {timestamp}")
         else:
             print("⚠️ No rows to save.")
+
     except Exception as e:
         print(f"Sheets Error: {e}")
 
@@ -106,18 +147,48 @@ def save_to_sheets(data):
 def fetch_and_save():
     IST = timezone(timedelta(hours=5, minutes=30))
     now = datetime.now(IST)
+
     market_open = (
         now.weekday() < 5 and
         (now.hour > 9 or (now.hour == 9 and now.minute >= 15)) and
         (now.hour < 15 or (now.hour == 15 and now.minute <= 30))
     )
+
     if market_open:
         print(f"📡 Fetching at {now.strftime('%H:%M:%S')} IST...")
-        data = get_nse_data()
-        if data:
-            save_to_sheets(data)
-        else:
-            print("❌ No data received from NSE.")
+
+        access_token = os.environ.get("UPSTOX_ACCESS_TOKEN")
+        if not access_token:
+            print("❌ UPSTOX_ACCESS_TOKEN not set!")
+            return
+
+        # Nearest expiry fetch karo
+        expiry_date = get_nearest_expiry(access_token)
+        if not expiry_date:
+            print("❌ Could not fetch expiry date!")
+            return
+
+        print(f"📅 Expiry: {expiry_date}")
+
+        # Option chain fetch karo
+        data = get_upstox_option_chain(access_token, expiry_date)
+        if not data:
+            print("❌ No data received from Upstox!")
+            return
+
+        option_data = data.get("data", [])
+        if not option_data:
+            print("❌ Empty option chain data!")
+            return
+
+        # Underlying price (first item se)
+        try:
+            underlying = option_data[0].get("underlying_spot_price", 0)
+        except:
+            underlying = 0
+
+        save_to_sheets(option_data, expiry_date, underlying)
+
     else:
         print(f"🔴 Market closed - {now.strftime('%H:%M:%S')} IST")
 
@@ -131,7 +202,7 @@ def run_scheduler():
 
 @app.route("/")
 def home():
-    return "✅ NSE Options Fetcher Running!"
+    return "✅ Upstox Options Fetcher Running!"
 
 
 @app.route("/fetch")
@@ -147,6 +218,7 @@ def status():
     return f"🕐 Current IST Time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
 
 
+# Scheduler background thread
 t = threading.Thread(target=run_scheduler)
 t.daemon = True
 t.start()
