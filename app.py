@@ -19,6 +19,19 @@ STRIKE_INTERVAL = 50
 # ==================================================
 
 
+def get_sheet():
+    creds_json = os.environ.get("GOOGLE_CREDS")
+    creds_dict = json.loads(creds_json)
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    sheet_id = os.environ.get("SHEET_ID")
+    return client.open_by_key(sheet_id).sheet1
+
+
 def get_nearest_expiry(access_token):
     url = f"https://api.upstox.com/v2/option/contract?instrument_key={INSTRUMENT_KEY}"
     headers = {
@@ -65,18 +78,9 @@ def get_upstox_option_chain(access_token, expiry_date):
 
 def save_to_sheets(option_data, expiry_date, underlying):
     try:
-        creds_json = os.environ.get("GOOGLE_CREDS")
-        creds_dict = json.loads(creds_json)
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
+        sheet = get_sheet()
 
-        sheet_id = os.environ.get("SHEET_ID")
-        sheet = client.open_by_key(sheet_id).sheet1
-
+        # Header row check
         try:
             first_cell = sheet.cell(1, 1).value
         except:
@@ -107,32 +111,22 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_market = ce.get("market_data", {})
             pe_market = pe.get("market_data", {})
 
-            # OI
             ce_oi = ce_market.get("oi", 0)
             pe_oi = pe_market.get("oi", 0)
 
-            # Change in OI = oi - prev_oi
-            ce_prev_oi = ce_market.get("prev_oi", 0)
-            pe_prev_oi = pe_market.get("prev_oi", 0)
-            ce_chng_oi = ce_oi - ce_prev_oi
-            pe_chng_oi = pe_oi - pe_prev_oi
+            ce_chng_oi = ce_oi - ce_market.get("prev_oi", 0)
+            pe_chng_oi = pe_oi - pe_market.get("prev_oi", 0)
 
-            # LTP — already rupees mein, divide nahi karna!
             ce_ltp = round(ce_market.get("ltp", 0), 2)
             pe_ltp = round(pe_market.get("ltp", 0), 2)
 
-            # IV
             ce_iv = ce_market.get("iv", 0)
             pe_iv = pe_market.get("iv", 0)
 
-            # Volume
             ce_vol = ce_market.get("volume", 0)
             pe_vol = pe_market.get("volume", 0)
 
-            # PCR
             pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else 0
-
-            # Underlying — already rupees mein!
             underlying_price = round(underlying, 2)
 
             rows.append([
@@ -221,6 +215,25 @@ def status():
     IST = timezone(timedelta(hours=5, minutes=30))
     now = datetime.now(IST)
     return f"🕐 Current IST Time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+
+@app.route("/clear")
+def clear_sheet():
+    try:
+        sheet = get_sheet()
+        # Saara data delete karo except header
+        sheet.clear()
+        # Header wapas daalo
+        headers_row = [
+            "Timestamp", "Symbol", "Expiry", "Strike",
+            "CE_OI", "CE_Chng_OI", "CE_LTP", "CE_IV", "CE_Volume",
+            "PE_OI", "PE_Chng_OI", "PE_LTP", "PE_IV", "PE_Volume",
+            "PCR", "Underlying"
+        ]
+        sheet.insert_row(headers_row, 1)
+        return "✅ Sheet cleared! Ab /fetch karo."
+    except Exception as e:
+        return f"❌ Error: {e}"
 
 
 @app.route("/debug")
