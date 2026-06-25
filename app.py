@@ -89,8 +89,8 @@ def save_to_sheets(option_data, expiry_date, underlying):
         if not first_cell:
             headers_row = [
                 "Timestamp", "Symbol", "Expiry", "Strike",
-                "CE OI", "CE Change OI", "CE LTP", "CE IV", "CE Volume",
-                "PE OI", "PE Change OI", "PE LTP", "PE IV", "PE Volume",
+                "CE_OI", "CE_Chng_OI", "CE_LTP", "CE_IV", "CE_Volume",
+                "PE_OI", "PE_Chng_OI", "PE_LTP", "PE_IV", "PE_Volume",
                 "PCR", "Underlying"
             ]
             sheet.insert_row(headers_row, 1)
@@ -111,9 +111,31 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_market = ce.get("market_data", {})
             pe_market = pe.get("market_data", {})
 
+            # OI values (raw — no division needed)
             ce_oi = ce_market.get("oi", 0)
             pe_oi = pe_market.get("oi", 0)
+
+            # Change in OI
+            ce_chng_oi = ce_market.get("change_in_oi", 0)
+            pe_chng_oi = pe_market.get("change_in_oi", 0)
+
+            # LTP — divide by 100 (Upstox paise mein deta hai)
+            ce_ltp = round(ce_market.get("ltp", 0) / 100, 2)
+            pe_ltp = round(pe_market.get("ltp", 0) / 100, 2)
+
+            # IV
+            ce_iv = ce_market.get("iv", 0)
+            pe_iv = pe_market.get("iv", 0)
+
+            # Volume
+            ce_vol = ce_market.get("volume", 0)
+            pe_vol = pe_market.get("volume", 0)
+
+            # PCR
             pcr = round(pe_oi / ce_oi, 2) if ce_oi > 0 else 0
+
+            # Underlying — divide by 100
+            underlying_price = round(underlying / 100, 2)
 
             rows.append([
                 timestamp,
@@ -121,17 +143,17 @@ def save_to_sheets(option_data, expiry_date, underlying):
                 expiry_date,
                 strike,
                 ce_oi,
-                ce_market.get("volume", 0),   # CE Change OI
-                ce_market.get("ltp", 0),
-                ce_market.get("iv", 0),
-                ce_market.get("volume", 0),
+                ce_chng_oi,
+                ce_ltp,
+                ce_iv,
+                ce_vol,
                 pe_oi,
-                pe_market.get("volume", 0),   # PE Change OI
-                pe_market.get("ltp", 0),
-                pe_market.get("iv", 0),
-                pe_market.get("volume", 0),
+                pe_chng_oi,
+                pe_ltp,
+                pe_iv,
+                pe_vol,
                 pcr,
-                round(underlying, 2)
+                underlying_price
             ])
 
         if rows:
@@ -162,7 +184,6 @@ def fetch_and_save():
             print("❌ UPSTOX_ACCESS_TOKEN not set!")
             return
 
-        # Nearest expiry fetch karo
         expiry_date = get_nearest_expiry(access_token)
         if not expiry_date:
             print("❌ Could not fetch expiry date!")
@@ -170,7 +191,6 @@ def fetch_and_save():
 
         print(f"📅 Expiry: {expiry_date}")
 
-        # Option chain fetch karo
         data = get_upstox_option_chain(access_token, expiry_date)
         if not data:
             print("❌ No data received from Upstox!")
@@ -181,7 +201,6 @@ def fetch_and_save():
             print("❌ Empty option chain data!")
             return
 
-        # Underlying price (first item se)
         try:
             underlying = option_data[0].get("underlying_spot_price", 0)
         except:
