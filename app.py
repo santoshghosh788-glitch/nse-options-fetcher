@@ -96,7 +96,6 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_market = ce.get("market_data", {})
             pe_market = pe.get("market_data", {})
 
-            # IV from greek_data (correct source)
             ce_greek = ce.get("option_greeks", {})
             pe_greek = pe.get("option_greeks", {})
 
@@ -109,7 +108,6 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_ltp = round(ce_market.get("ltp", 0), 2)
             pe_ltp = round(pe_market.get("ltp", 0), 2)
 
-            # IV fix - greek_data se lena
             ce_iv = round(ce_greek.get("iv", 0), 2)
             pe_iv = round(pe_greek.get("iv", 0), 2)
 
@@ -127,15 +125,20 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ])
 
         if rows:
-            # Duplicate fix - pehle row 2 se saara data clear karo, phir fresh daalo
-            sheet.clear()
-            headers_row = [
-                "Timestamp", "Symbol", "Expiry", "Strike",
-                "CE_OI", "CE_Chng_OI", "CE_LTP", "CE_IV", "CE_Volume",
-                "PE_OI", "PE_Chng_OI", "PE_LTP", "PE_IV", "PE_Volume",
-                "PCR", "Underlying"
-            ]
-            sheet.insert_row(headers_row, 1)
+            # Header check - sirf pehli baar header daalo
+            try:
+                first_cell = sheet.cell(1, 1).value
+            except:
+                first_cell = None
+
+            if not first_cell:
+                headers_row = [
+                    "Timestamp", "Symbol", "Expiry", "Strike",
+                    "CE_OI", "CE_Chng_OI", "CE_LTP", "CE_IV", "CE_Volume",
+                    "PE_OI", "PE_Chng_OI", "PE_LTP", "PE_IV", "PE_Volume",
+                    "PCR", "Underlying"
+                ]
+                sheet.insert_row(headers_row, 1)
             sheet.append_rows(rows)
             print(f"✅ {len(rows)} rows saved at {timestamp}")
         else:
