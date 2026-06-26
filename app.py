@@ -80,21 +80,6 @@ def save_to_sheets(option_data, expiry_date, underlying):
     try:
         sheet = get_sheet()
 
-        # Header row check
-        try:
-            first_cell = sheet.cell(1, 1).value
-        except:
-            first_cell = None
-
-        if not first_cell:
-            headers_row = [
-                "Timestamp", "Symbol", "Expiry", "Strike",
-                "CE_OI", "CE_Chng_OI", "CE_LTP", "CE_IV", "CE_Volume",
-                "PE_OI", "PE_Chng_OI", "PE_LTP", "PE_IV", "PE_Volume",
-                "PCR", "Underlying"
-            ]
-            sheet.insert_row(headers_row, 1)
-
         IST = timezone(timedelta(hours=5, minutes=30))
         timestamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         atm = round(underlying / STRIKE_INTERVAL) * STRIKE_INTERVAL
@@ -111,6 +96,10 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_market = ce.get("market_data", {})
             pe_market = pe.get("market_data", {})
 
+            # IV from greek_data (correct source)
+            ce_greek = ce.get("option_greeks", {})
+            pe_greek = pe.get("option_greeks", {})
+
             ce_oi = ce_market.get("oi", 0)
             pe_oi = pe_market.get("oi", 0)
 
@@ -120,8 +109,9 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ce_ltp = round(ce_market.get("ltp", 0), 2)
             pe_ltp = round(pe_market.get("ltp", 0), 2)
 
-            ce_iv = ce_market.get("iv", 0)
-            pe_iv = pe_market.get("iv", 0)
+            # IV fix - greek_data se lena
+            ce_iv = round(ce_greek.get("iv", 0), 2)
+            pe_iv = round(pe_greek.get("iv", 0), 2)
 
             ce_vol = ce_market.get("volume", 0)
             pe_vol = pe_market.get("volume", 0)
@@ -137,6 +127,15 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ])
 
         if rows:
+            # Duplicate fix - pehle row 2 se saara data clear karo, phir fresh daalo
+            sheet.clear()
+            headers_row = [
+                "Timestamp", "Symbol", "Expiry", "Strike",
+                "CE_OI", "CE_Chng_OI", "CE_LTP", "CE_IV", "CE_Volume",
+                "PE_OI", "PE_Chng_OI", "PE_LTP", "PE_IV", "PE_Volume",
+                "PCR", "Underlying"
+            ]
+            sheet.insert_row(headers_row, 1)
             sheet.append_rows(rows)
             print(f"✅ {len(rows)} rows saved at {timestamp}")
         else:
@@ -221,9 +220,7 @@ def status():
 def clear_sheet():
     try:
         sheet = get_sheet()
-        # Saara data delete karo except header
         sheet.clear()
-        # Header wapas daalo
         headers_row = [
             "Timestamp", "Symbol", "Expiry", "Strike",
             "CE_OI", "CE_Chng_OI", "CE_LTP", "CE_IV", "CE_Volume",
@@ -243,9 +240,14 @@ def debug():
     data = get_upstox_option_chain(access_token, expiry_date)
     if data:
         first_item = data.get("data", [])[0]
-        ce = first_item.get("call_options", {}).get("market_data", {})
-        pe = first_item.get("put_options", {}).get("market_data", {})
-        return {"ce_fields": ce, "pe_fields": pe}
+        ce = first_item.get("call_options", {})
+        pe = first_item.get("put_options", {})
+        return {
+            "ce_market": ce.get("market_data", {}),
+            "ce_greeks": ce.get("option_greeks", {}),
+            "pe_market": pe.get("market_data", {}),
+            "pe_greeks": pe.get("option_greeks", {})
+        }
     return {"error": "No data"}
 
 
