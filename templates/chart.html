@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NIFTY Change in OI</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #131722; color: #d1d4dc; font-family: sans-serif; padding: 10px; }
+
+.top-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.title { font-size: 14px; color: #aaa; font-weight: 600; }
+#status { font-size: 11px; color: #555; flex: 1; }
+#refreshBtn { font-size: 11px; padding: 4px 12px; border-radius: 4px; border: 1px solid #2a2e39; background: #1e222d; color: #888; cursor: pointer; }
+
+.dropdown-wrap { position: relative; margin-bottom: 10px; }
+.dropdown-btn { width: 100%; padding: 8px 14px; background: #1e222d; border: 1px solid #2a2e39; border-radius: 6px; color: #d1d4dc; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.dropdown-btn span { color: #787b86; }
+.dropdown-panel { display: none; position: absolute; top: 100%; left: 0; right: 0; background: #1e222d; border: 1px solid #2a2e39; border-radius: 6px; z-index: 100; padding: 8px 0; max-height: 320px; overflow-y: auto; }
+.dropdown-panel.open { display: block; }
+
+.select-all { padding: 6px 14px; font-size: 12px; color: #787b86; cursor: pointer; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #2a2e39; margin-bottom: 4px; }
+
+.strike-item { padding: 5px 14px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #d1d4dc; cursor: pointer; }
+.strike-item:hover { background: #252b3b; }
+.color-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+.cb { width: 16px; height: 16px; border-radius: 3px; border: 1.5px solid #444; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.cb.checked { background: #2962ff; border-color: #2962ff; }
+.cb.checked::after { content: '✓'; color: white; font-size: 10px; }
+
+.legend { display: flex; gap: 14px; font-size: 11px; color: #787b86; margin-bottom: 6px; flex-wrap: wrap; }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.ldot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+.chart-wrap { position: relative; width: 100%; height: 360px; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <span class="title">NIFTY — Change in OI</span>
+  <span id="status">Loading...</span>
+  <button id="refreshBtn" onclick="loadData()">↻ Refresh</button>
+</div>
+
+<div class="dropdown-wrap">
+  <div class="dropdown-btn" onclick="toggleDropdown()">
+    <span id="dropdown-label">Select Strikes</span>
+    <span>▾</span>
+  </div>
+  <div class="dropdown-panel" id="dropdown-panel">
+    <div class="select-all" onclick="toggleAll()">
+      <div class="cb" id="cb-all"></div>
+      <span>Select All</span>
+    </div>
+    <div id="strike-list"></div>
+  </div>
+</div>
+
+<div class="legend" id="legend"></div>
+<div class="chart-wrap"><canvas id="chart"></canvas></div>
+
+<script>
+const SHEET_ID = '{{ sheet_id }}';
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=Sheet1`;
+
+const CE_COLORS = ['#e34948','#f39c12','#9b59b6','#1abc9c','#e67e22','#e91e63'];
+const PE_COLORS = ['#2962ff','#00bcd4','#8e44ad','#27ae60','#3498db','#00e676'];
+
+let allData = [], myChart = null;
+let strikes = [];
+let selected = new Set(); // "24200_CE", "24200_PE" format
+
+function toggleDropdown() {
+  document.getElementById('dropdown-panel').classList.toggle('open');
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown-wrap')) {
+    document.getElementById('dropdown-panel').classList.remove('open');
+  }
+});
+
+async function loadData() {
+  document.getElementById('status').textContent = 'Loading...';
+  try {
+    const res = await fetch(CSV_URL + '&t=' + Date.now());
+    if (!res.ok) throw new Error('Sheet not accessible');
+    const text = await res.text();
+    const lines = text.trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g,''));
+    allData = lines.slice(1).map(line => {
+      const vals = line.split(',').map(v => v.trim().replace(/"/g,''));
+      const obj = {};
+      headers.forEach((h,i) => obj[h] = vals[i]);
+      return obj;
+    }).filter(r => r.Timestamp && r.Strike);
+    const last = allData[allData.length-1]?.Timestamp?.split(' ')[1]?.slice(0,5) || '-';
+    document.getElementById('status').textContent = `${allData.length} rows | ${last}`;
+    setupStrikes();
+  } catch(e) {
+    document.getElementById('status').textContent = 'Error: ' + e.message;
+  }
+}
+
+function setupStrikes() {
+  strikes = [...new Set(allData.map(r => Number(r.Strike)))].sort((a,b)=>a-b);
+
+  // Default: middle strike CE + PE selected
+  if (selected.size === 0) {
+    const mid = strikes[Math.floor(strikes.length/2)];
+    selected.add(`${mid}_CE`);
+    selected.add(`${mid}_PE`);
+  }
+
+  buildStrikeList();
+  updateDropdownLabel();
+  renderChart();
+}
+
+function buildStrikeList() {
+  const list = document.getElementById('strike-list');
+  list.innerHTML = '';
+  strikes.forEach((s, idx) => {
+    ['CE','PE'].forEach(type => {
+      const key = `${s}_${type}`;
+      const color = type==='CE' ? CE_COLORS[idx%CE_COLORS.length] : PE_COLORS[idx%PE_COLORS.length];
+      const isChecked = selected.has(key);
+
+      const item = document.createElement('div');
+      item.className = 'strike-item';
+      item.innerHTML = `
+        <div class="cb ${isChecked?'checked':''}" id="cb-${key}"></div>
+        <div class="color-dot" style="background:${color}"></div>
+        <span>${s} ${type}</span>
+      `;
+      item.onclick = () => toggleStrike(key);
+      list.appendChild(item);
+    });
+  });
+}
+
+function toggleStrike(key) {
+  if (selected.has(key)) selected.delete(key);
+  else selected.add(key);
+  const cb = document.getElementById('cb-'+key);
+  if(cb) cb.className = 'cb' + (selected.has(key)?' checked':'');
+  updateDropdownLabel();
+  updateSelectAll();
+  renderChart();
+}
+
+function toggleAll() {
+  const allKeys = [];
+  strikes.forEach(s => { allKeys.push(`${s}_CE`); allKeys.push(`${s}_PE`); });
+  const allSelected = allKeys.every(k => selected.has(k));
+  if (allSelected) { selected.clear(); }
+  else { allKeys.forEach(k => selected.add(k)); }
+  buildStrikeList();
+  updateSelectAll();
+  updateDropdownLabel();
+  renderChart();
+}
+
+function updateSelectAll() {
+  const allKeys = [];
+  strikes.forEach(s => { allKeys.push(`${s}_CE`); allKeys.push(`${s}_PE`); });
+  const allSelected = allKeys.every(k => selected.has(k));
+  const cb = document.getElementById('cb-all');
+  if(cb) cb.className = 'cb' + (allSelected?' checked':'');
+}
+
+function updateDropdownLabel() {
+  const count = selected.size;
+  document.getElementById('dropdown-label').textContent = count === 0 ? 'Select Strikes' : `${count} selected`;
+}
+
+function renderChart() {
+  const times = [...new Set(allData.map(r=>r.Timestamp))].sort();
+  const labels = times.map(t => t.split(' ')[1]?.slice(0,5) || t);
+
+  const spotData = times.map(t => {
+    const r = allData.find(d => d.Timestamp===t);
+    return r ? (Number(r.Underlying)||null) : null;
+  });
+
+  const datasets = [{
+    label:'Spot', data: spotData,
+    borderColor:'#787b86', borderWidth:1.5, pointRadius:0, tension:0.2, yAxisID:'y0'
+  }];
+
+  // Build legend
+  const legendEl = document.getElementById('legend');
+  legendEl.innerHTML = '<span><span class="ldot" style="background:#787b86"></span>Spot</span>';
+
+  strikes.forEach((strike, idx) => {
+    ['CE','PE'].forEach(type => {
+      const key = `${strike}_${type}`;
+      if (!selected.has(key)) return;
+      const color = type==='CE' ? CE_COLORS[idx%CE_COLORS.length] : PE_COLORS[idx%PE_COLORS.length];
+      const field = type==='CE' ? 'CE_Chng_OI' : 'PE_Chng_OI';
+
+      datasets.push({
+        label: `${strike} ${type}`,
+        data: times.map(t => {
+          const r = allData.find(d => d.Timestamp===t && Number(d.Strike)===strike);
+          return r ? (Number(r[field])||null) : null;
+        }),
+        borderColor: color, borderWidth:2, pointRadius:0, tension:0.3, yAxisID:'y1'
+      });
+
+      legendEl.innerHTML += `<span><span class="ldot" style="background:${color}"></span>${strike} ${type}</span>`;
+    });
+  });
+
+  if(myChart) myChart.destroy();
+  myChart = new Chart(document.getElementById('chart'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode:'index', intersect:false },
+      plugins: {
+        legend: { display:false },
+        tooltip: {
+          backgroundColor:'#1e222d', titleColor:'#d1d4dc', bodyColor:'#d1d4dc',
+          borderColor:'#2a2e39', borderWidth:1,
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              if(v===null||v===undefined) return null;
+              if(ctx.dataset.yAxisID==='y0') return `Spot: ${v.toFixed(0)}`;
+              return `${ctx.dataset.label}: ${(v>=0?'+':'')+(v/100000).toFixed(2)}L`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks:{ maxTicksLimit:8, color:'#555', font:{size:10} }, grid:{ color:'rgba(255,255,255,0.04)' } },
+        y0: { type:'linear', position:'left', ticks:{ color:'#555', font:{size:10} }, grid:{ color:'rgba(255,255,255,0.04)' } },
+        y1: { type:'linear', position:'right', ticks:{ color:'#555', font:{size:10}, callback: v=>(v>=0?'+':'')+(v/100000).toFixed(1)+'L' }, grid:{ drawOnChartArea:false } }
+      }
+    }
+  });
+}
+
+loadData();
+setInterval(loadData, 3 * 60 * 1000);
+</script>
+</body>
+</html>
