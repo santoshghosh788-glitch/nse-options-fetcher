@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NIFTY Net OI Difference</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #131722; color: #d1d4dc; font-family: sans-serif; padding: 10px; }
+.top-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.title { font-size: 14px; color: #aaa; font-weight: 600; }
+#status { font-size: 11px; color: #555; flex: 1; }
+#refreshBtn { font-size: 11px; padding: 4px 12px; border-radius: 4px; border: 1px solid #2a2e39; background: #1e222d; color: #888; cursor: pointer; }
+.nav-link { font-size: 11px; padding: 4px 12px; border-radius: 4px; border: 1px solid #2962ff; background: #1a3a5c; color: #4ea8f5; cursor: pointer; text-decoration: none; }
+.legend { display: flex; gap: 14px; font-size: 11px; color: #787b86; margin-bottom: 4px; flex-wrap: wrap; }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.ldot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.panel-label { font-size: 11px; color: #555; margin: 4px 0 3px; text-transform: uppercase; letter-spacing: 0.5px; }
+.chart-wrap-lg { position: relative; width: 100%; height: 230px; margin-bottom: 14px; }
+.chart-wrap-sm { position: relative; width: 100%; height: 200px; }
+.info-box { font-size: 11px; color: #555; margin-bottom: 10px; padding: 6px 10px; background: #1e222d; border-radius: 5px; border-left: 3px solid #2962ff; }
+</style>
+</head>
+<body>
+<div class="top-bar">
+  <span class="title">NIFTY — Net OI Difference</span>
+  <span id="status">Loading...</span>
+  <button id="refreshBtn" onclick="loadData()">↻ Refresh</button>
+  <a href="/chart" class="nav-link">← Chng OI</a>
+</div>
+<div class="info-box">
+  📊 Net = Σ PE_Chng_OI − Σ CE_Chng_OI (ATM ±5 strikes) | 15 min smoothed<br>
+  🟢 Above 0 = Retail buying PUTs → Play CALL | 🔴 Below 0 = Retail buying CALLs → Play PUT
+</div>
+<div class="legend">
+  <span><span class="ldot" style="background:#d1d4dc"></span>NIFTY Spot</span>
+  <span><span class="ldot" style="background:#f9a825;border-top:1px dashed #f9a825"></span>VWAP</span>
+</div>
+<div class="panel-label">Spot Price + VWAP</div>
+<div class="chart-wrap-lg"><canvas id="chartSpot"></canvas></div>
+<div class="legend">
+  <span><span class="ldot" style="background:#26a69a"></span>Net OI Diff (PE−CE)</span>
+</div>
+<div class="panel-label">Net OI Difference (15 min)</div>
+<div class="chart-wrap-sm"><canvas id="chartNet"></canvas></div>
+<script>
+const SHEET_ID = '{{ sheet_id }}';
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=Sheet1`;
+const ATM_STRIKES = 5;
+let allData = [], chartSpot = null, chartNet = null;
+
+async function loadData() {
+  document.getElementById('status').textContent = 'Loading...';
+  try {
+    const res = await fetch(CSV_URL + '&t=' + Date.now());
+    if (!res.ok) throw new Error('Sheet not accessible');
+    const text = await res.text();
+    const lines = text.trim().split('\n');
+    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g,''));
+    allData = lines.slice(1).map(line => {
+      const vals = line.split(',').map(v => v.trim().replace(/"/g,''));
+      const obj = {}; headers.forEach((h,i) => obj[h] = vals[i]); return obj;
+    }).filter(r => r.Timestamp && r.Strike);
+    const last = allData[allData.length-1]?.Timestamp?.split(' ')[1]?.slice(0,5) || '-';
+    document.getElementById('status').textContent = `${allData.length} rows | Last: ${last}`;
+    renderCharts();
+  } catch(e) { document.getElementById('status').textContent = 'Error: ' + e.message; }
+}
+
+function getATMStrikes(underlying) {
+  const atm = Math.round(underlying / 50) * 50;
+  const strikes = [];
+  for(let i = -ATM_STRIKES; i <= ATM_STRIKES; i++) strikes.push(atm + i * 50);
+  return strikes;
+}
+
+function computeNetByTimestamp() {
+  const times = [...new Set(allData.map(r=>r.Timestamp))].sort();
+  return times.map(t => {
+    const rows = allData.filter(r => r.Timestamp === t);
+    if(!rows.length) return null;
+    const underlying = Number(rows[0].Underlying) || 0;
+    const atmStrikes = getATMStrikes(underlying);
+    let totalCE = 0, totalPE = 0;
+    rows.forEach(r => { const strike = Number(r.Strike); if(atmStrikes.includes(strike)) { totalCE += Number(r.CE_Chng_OI)||0; totalPE += Number(r.PE_Chng_OI)||0; } });
+    return { time: t, net: totalPE - totalCE, spot: underlying };
+  }).filter(Boolean);
+}
+
+function computeVWAP(spotData) {
+  let cumSum = 0;
+  return spotData.map((price, i) => { cumSum += price; return cumSum / (i + 1); });
+}
+
+function smooth15min(data) {
+  const buckets = {};
+  data.forEach(d => {
+    const timeParts = d.time.split(' ');
+    const date = timeParts[0];
+    const [h, m] = timeParts[1].split(':').map(Number);
+    const bucket15 = Math.floor(m / 15) * 15;
+    const key = `${date} ${String(h).padStart(2,'0')}:${String(bucket15).padStart(2,'0')}`;
+    if(!buckets[key]) buckets[key] = { nets: [], spots: [] };
+    buckets[key].nets.push(d.net);
+    buckets[key].spots.push(d.spot);
+  });
+  return Object.keys(buckets).sort().map(k => ({
+    label: k.split(' ')[1]?.slice(0,5) || k,
+    net: buckets[k].nets.reduce((a,b)=>a+b,0) / buckets[k].nets.length,
+    spot: buckets[k].spots.reduce((a,b)=>a+b,0) / buckets[k].spots.length
+  }));
+}
+
+function renderCharts() {
+  const rawData = computeNetByTimestamp();
+  const smoothed = smooth15min(rawData);
+  const labels = smoothed.map(d => d.label);
+  const netData = smoothed.map(d => d.net);
+  const spotData = smoothed.map(d => d.spot);
+  const vwapData = computeVWAP(spotData);
+  const zeroLine = smoothed.map(() => 0);
+
+  if(chartSpot) chartSpot.destroy();
+  chartSpot = new Chart(document.getElementById('chartSpot'), {
+    type:'line', data:{ labels, datasets:[
+      { label:'NIFTY Spot', data:spotData, borderColor:'#d1d4dc', borderWidth:1.5, pointRadius:0, tension:0.3, fill:false },
+      { label:'VWAP', data:vwapData, borderColor:'#f9a825', borderWidth:1.5, borderDash:[5,3], pointRadius:0, tension:0.3, fill:false }
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false },
+      plugins:{ legend:{ display:false }, tooltip:{ backgroundColor:'#1e222d', titleColor:'#d1d4dc', bodyColor:'#d1d4dc', borderColor:'#2a2e39', borderWidth:1,
+        callbacks:{ label: ctx => { const v=ctx.parsed.y; return `${ctx.dataset.label}: ${v.toFixed(0)}`; } } } },
+      scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#555', font:{size:10} }, grid:{ color:'rgba(255,255,255,0.04)' } }, y:{ ticks:{ color:'#555', font:{size:10} }, grid:{ color:'rgba(255,255,255,0.04)' } } } }
+  });
+
+  if(chartNet) chartNet.destroy();
+  chartNet = new Chart(document.getElementById('chartNet'), {
+    type:'line', data:{ labels, datasets:[
+      { label:'Zero', data:zeroLine, borderColor:'rgba(255,255,255,0.2)', borderWidth:1, borderDash:[4,4], pointRadius:0, fill:false },
+      { label:'Net OI Diff', data:netData, borderColor:'#26a69a', backgroundColor:(ctx) => {
+        const chart=ctx.chart; const {ctx:c,chartArea}=chart; if(!chartArea) return 'transparent';
+        const g=c.createLinearGradient(0,chartArea.top,0,chartArea.bottom);
+        g.addColorStop(0,'rgba(38,166,154,0.3)'); g.addColorStop(0.5,'rgba(38,166,154,0.05)'); g.addColorStop(1,'rgba(239,83,80,0.1)'); return g;
+      }, borderWidth:2, pointRadius:0, tension:0.3, fill:true }
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false },
+      plugins:{ legend:{ display:false }, tooltip:{ backgroundColor:'#1e222d', titleColor:'#d1d4dc', bodyColor:'#d1d4dc', borderColor:'#2a2e39', borderWidth:1,
+        callbacks:{ label: ctx => { if(ctx.dataset.label==='Zero') return null; const v=ctx.parsed.y; return `Net: ${(v/100000).toFixed(2)}L | ${v>0?'🟢 Buy CALL':'🔴 Buy PUT'}`; } } } },
+      scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#555', font:{size:10} }, grid:{ color:'rgba(255,255,255,0.04)' } }, y:{ ticks:{ color:'#555', font:{size:10}, callback: v=>(v>=0?'+':'')+(v/100000).toFixed(1)+'L' }, grid:{ color:'rgba(255,255,255,0.04)' } } } }
+  });
+}
+loadData();
+setInterval(loadData, 3 * 60 * 1000);
+</script>
+</body>
+</html>
