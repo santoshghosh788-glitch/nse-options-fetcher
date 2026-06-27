@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, render_template
 import requests
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -125,7 +125,6 @@ def save_to_sheets(option_data, expiry_date, underlying):
             ])
 
         if rows:
-            # Header check - sirf pehli baar header daalo
             try:
                 first_cell = sheet.cell(1, 1).value
             except:
@@ -204,6 +203,12 @@ def run_scheduler():
 @app.route("/")
 def home():
     return "✅ Upstox Options Fetcher Running!"
+
+
+@app.route("/chart")
+def chart():
+    sheet_id = os.environ.get("SHEET_ID", "")
+    return render_template("chart.html", sheet_id=sheet_id)
 
 
 @app.route("/fetch")
