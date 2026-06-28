@@ -211,6 +211,12 @@ def chart():
     return render_template("chart.html", sheet_id=sheet_id)
 
 
+@app.route("/chart2")
+def chart2():
+    sheet_id = os.environ.get("SHEET_ID", "")
+    return render_template("chart2.html", sheet_id=sheet_id)
+
+
 @app.route("/fetch")
 def manual_fetch():
     fetch_and_save()
