@@ -29,18 +29,17 @@ body { background: #131722; color: #d1d4dc; font-family: sans-serif; padding: 10
 .ldot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 .chart-wrap { position: relative; width: 100%; height: 360px; }
 
-/* Net OI Candle Section */
 .section-title {
   font-size: 12px;
   color: #787b86;
   font-weight: 600;
   margin: 14px 0 6px 0;
-  padding-left: 2px;
   border-left: 3px solid #2962ff;
   padding-left: 8px;
 }
 .candle-wrap { position: relative; width: 100%; height: 280px; }
 .vol-wrap { position: relative; width: 100%; height: 100px; margin-top: 4px; }
+.line-wrap { position: relative; width: 100%; height: 220px; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -63,22 +62,29 @@ body { background: #131722; color: #d1d4dc; font-family: sans-serif; padding: 10
     <div id="strike-list"></div>
   </div>
 </div>
+
+<!-- Panel 1: Strike-wise Change in OI -->
+<div class="section-title" style="border-color:#2962ff">Strike-wise Change in OI</div>
 <div class="legend" id="legend"></div>
 <div class="chart-wrap"><canvas id="chart"></canvas></div>
 
-<!-- Net OI Candlestick Section -->
-<div class="section-title">Net OI — 15 Min Candlestick &nbsp;<span style="color:#26a69a;font-weight:400">▲ Bullish</span> &nbsp;<span style="color:#ef5350;font-weight:400">▼ Bearish</span></div>
+<!-- Panel 2: Net OI Candlestick -->
+<div class="section-title" style="border-color:#26a69a">Net OI — 15 Min Candlestick &nbsp;<span style="color:#26a69a;font-weight:400">▲ Bullish</span> &nbsp;<span style="color:#ef5350;font-weight:400">▼ Bearish</span></div>
 <div class="candle-wrap"><canvas id="candleChart"></canvas></div>
 
 <div class="section-title" style="border-color:#f39c12">Net OI — Volume Bar (15 Min)</div>
 <div class="vol-wrap"><canvas id="volChart"></canvas></div>
+
+<!-- Panel 3: Net OI Line (Murarka Style) -->
+<div class="section-title" style="border-color:#9b59b6">Net OI — Line Chart &nbsp;<span style="color:#26a69a;font-weight:400">Above 0 = CE Heavy (Bearish)</span> &nbsp;<span style="color:#ef5350;font-weight:400">Below 0 = PE Heavy (Bullish)</span></div>
+<div class="line-wrap"><canvas id="lineChart"></canvas></div>
 
 <script>
 const SHEET_ID = '{{ sheet_id }}';
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=Sheet1`;
 const CE_COLORS = ['#e34948','#f39c12','#9b59b6','#1abc9c','#e67e22','#e91e63'];
 const PE_COLORS = ['#2962ff','#00bcd4','#8e44ad','#27ae60','#3498db','#00e676'];
-let allData = [], myChart = null, candleChart = null, volChart = null;
+let allData = [], myChart = null, candleChart = null, volChart = null, lineChart = null;
 let strikes = [], selected = new Set();
 
 function toggleDropdown() { document.getElementById('dropdown-panel').classList.toggle('open'); }
@@ -105,7 +111,7 @@ async function loadData() {
 function setupStrikes() {
   strikes = [...new Set(allData.map(r => Number(r.Strike)))].sort((a,b)=>a-b);
   if (selected.size === 0) { const mid = strikes[Math.floor(strikes.length/2)]; selected.add(`${mid}_CE`); selected.add(`${mid}_PE`); }
-  buildStrikeList(); updateDropdownLabel(); renderChart(); renderCandleChart();
+  buildStrikeList(); updateDropdownLabel(); renderChart(); renderCandleChart(); renderLineChart();
 }
 
 function buildStrikeList() {
@@ -125,14 +131,14 @@ function toggleStrike(key) {
   if(selected.has(key)) selected.delete(key); else selected.add(key);
   const cb = document.getElementById('cb-'+key);
   if(cb) cb.className = 'cb' + (selected.has(key)?' checked':'');
-  updateDropdownLabel(); updateSelectAll(); renderChart(); renderCandleChart();
+  updateDropdownLabel(); updateSelectAll(); renderChart(); renderCandleChart(); renderLineChart();
 }
 
 function toggleAll() {
   const allKeys = []; strikes.forEach(s => { allKeys.push(`${s}_CE`); allKeys.push(`${s}_PE`); });
   const allSelected = allKeys.every(k => selected.has(k));
   if(allSelected) selected.clear(); else allKeys.forEach(k => selected.add(k));
-  buildStrikeList(); updateSelectAll(); updateDropdownLabel(); renderChart(); renderCandleChart();
+  buildStrikeList(); updateSelectAll(); updateDropdownLabel(); renderChart(); renderCandleChart(); renderLineChart();
 }
 
 function updateSelectAll() {
@@ -145,6 +151,7 @@ function updateDropdownLabel() {
   document.getElementById('dropdown-label').textContent = selected.size === 0 ? 'Select Strikes' : `${selected.size} selected`;
 }
 
+// ─── PANEL 1: Strike-wise Change in OI ────────────────────────────────────
 function renderChart() {
   const times = [...new Set(allData.map(r=>r.Timestamp))].sort();
   const labels = times.map(t => t.split(' ')[1]?.slice(0,5) || t);
@@ -172,12 +179,9 @@ function renderChart() {
   });
 }
 
-// ─── NET OI CANDLESTICK + VOLUME ───────────────────────────────────────────
-
+// ─── NET OI DATA HELPERS ──────────────────────────────────────────────────
 function computeNetOIPerTimestamp() {
-  // Get all timestamps sorted
   const times = [...new Set(allData.map(r => r.Timestamp))].sort();
-  // For each timestamp, sum all CE_Chng_OI and PE_Chng_OI across all strikes
   return times.map(t => {
     const rows = allData.filter(r => r.Timestamp === t);
     let totalCE = 0, totalPE = 0;
@@ -185,15 +189,11 @@ function computeNetOIPerTimestamp() {
       totalCE += Number(r.CE_Chng_OI) || 0;
       totalPE += Number(r.PE_Chng_OI) || 0;
     });
-    // Net OI = CE - PE
-    // Negative = PE dominant = Bullish (green)
-    // Positive = CE dominant = Bearish (red)
     return { time: t, label: t.split(' ')[1]?.slice(0,5) || t, netOI: totalCE - totalPE };
   });
 }
 
 function groupInto15Min(netOIData) {
-  // Group every 5 rows (5 × 3min = 15min)
   const candles = [];
   for (let i = 0; i < netOIData.length; i += 5) {
     const chunk = netOIData.slice(i, i + 5);
@@ -203,21 +203,12 @@ function groupInto15Min(netOIData) {
     const close = values[values.length - 1];
     const high  = Math.max(...values);
     const low   = Math.min(...values);
-    candles.push({
-      label: chunk[0].label,
-      open, high, low, close,
-      bullish: close >= open
-    });
+    candles.push({ label: chunk[0].label, open, high, low, close, bullish: close >= open });
   }
   return candles;
 }
 
-// Custom candlestick plugin for Chart.js
-const CandlestickController = {
-  id: 'candlestick',
-  // Draw candlesticks on a bar chart using afterDatasetsDraw
-};
-
+// ─── PANEL 2: Candlestick ─────────────────────────────────────────────────
 function renderCandleChart() {
   const netOIData = computeNetOIPerTimestamp();
   const candles = groupInto15Min(netOIData);
@@ -227,8 +218,6 @@ function renderCandleChart() {
   const bullColor = '#26a69a';
   const bearColor = '#ef5350';
 
-  // ── Candlestick Chart ──────────────────────────────────────────────────
-  // We use a floating bar chart trick: each bar = [open, close], wick via custom plugin
   const candlePlugin = {
     id: 'candleWicks',
     afterDatasetsDraw(chart) {
@@ -243,7 +232,6 @@ function renderCandleChart() {
         ctx.save();
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.5;
-        // Upper wick: top of body to high
         const bodyTop    = Math.min(yOpen, yClose);
         const bodyBottom = Math.max(yOpen, yClose);
         ctx.beginPath(); ctx.moveTo(xPos, bodyTop);    ctx.lineTo(xPos, yHigh); ctx.stroke();
@@ -253,10 +241,8 @@ function renderCandleChart() {
     }
   };
 
-  // Floating bar: [min(open,close), max(open,close)]
   const barData = candles.map(c => [Math.min(c.open, c.close), Math.max(c.open, c.close)]);
   const barColors = candles.map(c => c.bullish ? bullColor : bearColor);
-  const borderColors = candles.map(c => c.bullish ? bullColor : bearColor);
 
   if (candleChart) candleChart.destroy();
   candleChart = new Chart(document.getElementById('candleChart'), {
@@ -268,12 +254,120 @@ function renderCandleChart() {
         label: 'Net OI',
         data: barData,
         backgroundColor: barColors.map(c => c + 'cc'),
-        borderColor: borderColors,
+        borderColor: barColors,
         borderWidth: 1.5,
         borderSkipped: false,
         barPercentage: 0.6,
         categoryPercentage: 0.8,
       }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e222d', titleColor: '#d1d4dc', bodyColor: '#d1d4dc',
+          borderColor: '#2a2e39', borderWidth: 1,
+          callbacks: {
+            title: (items) => `${items[0].label} (15 Min)`,
+            label: (ctx) => {
+              const i = ctx.dataIndex; const c = candles[i];
+              const fmt = v => (v >= 0 ? '+' : '') + (v / 100000).toFixed(2) + 'L';
+              return [`O: ${fmt(c.open)}`, `H: ${fmt(c.high)}`, `L: ${fmt(c.low)}`, `C: ${fmt(c.close)}`, c.bullish ? '▲ Bullish' : '▼ Bearish'];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#555', font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: {
+          ticks: { color: '#555', font: { size: 10 }, callback: v => (v >= 0 ? '+' : '') + (v / 100000).toFixed(1) + 'L' },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          afterDataLimits(scale) { scale.min = Math.min(scale.min, 0); scale.max = Math.max(scale.max, 0); }
+        }
+      }
+    }
+  });
+
+  // Volume bar
+  const volData = candles.map(c => Math.abs(c.close));
+  const volColors = candles.map(c => (c.bullish ? bullColor : bearColor) + 'bb');
+
+  if (volChart) volChart.destroy();
+  volChart = new Chart(document.getElementById('volChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ label: 'Net OI Abs', data: volData, backgroundColor: volColors, borderColor: candles.map(c => c.bullish ? bullColor : bearColor), borderWidth: 1, barPercentage: 0.7, categoryPercentage: 0.85 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e222d', titleColor: '#d1d4dc', bodyColor: '#d1d4dc', borderColor: '#2a2e39', borderWidth: 1,
+          callbacks: {
+            title: (items) => `${items[0].label} (15 Min)`,
+            label: (ctx) => { const i = ctx.dataIndex; const c = candles[i]; return `Net OI: ${(Math.abs(c.close)/100000).toFixed(2)}L | ${c.bullish ? '▲ Bull' : '▼ Bear'}`; }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#555', font: { size: 9 }, maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { ticks: { color: '#555', font: { size: 9 }, callback: v => (v / 100000).toFixed(1) + 'L' }, grid: { color: 'rgba(255,255,255,0.04)' } }
+      }
+    }
+  });
+}
+
+// ─── PANEL 3: Net OI Line Chart (Murarka Style) ───────────────────────────
+function renderLineChart() {
+  const netOIData = computeNetOIPerTimestamp();
+  if (netOIData.length === 0) return;
+
+  const labels = netOIData.map(d => d.label);
+  const values = netOIData.map(d => d.netOI);
+
+  // Color each segment: green if below 0 (PE heavy = bullish), red if above 0 (CE heavy = bearish)
+  const pointColors = values.map(v => v >= 0 ? '#ef5350' : '#26a69a');
+
+  if (lineChart) lineChart.destroy();
+  lineChart = new Chart(document.getElementById('lineChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Net OI (CE - PE)',
+          data: values,
+          borderColor: '#9b59b6',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: {
+            target: { value: 0 },
+            above: 'rgba(239,83,80,0.15)',   // CE heavy = bearish = red fill
+            below: 'rgba(38,166,154,0.15)',   // PE heavy = bullish = green fill
+          },
+          segment: {
+            borderColor: ctx => {
+              const v = ctx.p1.parsed.y;
+              return v >= 0 ? '#ef5350' : '#26a69a';
+            }
+          }
+        },
+        {
+          // Zero line reference
+          label: 'Zero',
+          data: values.map(() => 0),
+          borderColor: 'rgba(255,255,255,0.1)',
+          borderWidth: 1,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          fill: false,
+        }
+      ]
     },
     options: {
       responsive: true,
@@ -284,19 +378,12 @@ function renderCandleChart() {
         tooltip: {
           backgroundColor: '#1e222d', titleColor: '#d1d4dc', bodyColor: '#d1d4dc',
           borderColor: '#2a2e39', borderWidth: 1,
+          filter: item => item.datasetIndex === 0,
           callbacks: {
-            title: (items) => `${items[0].label} (15 Min)`,
-            label: (ctx) => {
-              const i = ctx.dataIndex;
-              const c = candles[i];
-              const fmt = v => (v >= 0 ? '+' : '') + (v / 100000).toFixed(2) + 'L';
-              return [
-                `O: ${fmt(c.open)}`,
-                `H: ${fmt(c.high)}`,
-                `L: ${fmt(c.low)}`,
-                `C: ${fmt(c.close)}`,
-                c.bullish ? '▲ Bullish (PE dominant)' : '▼ Bearish (CE dominant)'
-              ];
+            label: ctx => {
+              const v = ctx.parsed.y;
+              const sentiment = v >= 0 ? '▼ CE Heavy (Bearish)' : '▲ PE Heavy (Bullish)';
+              return `Net OI: ${(v >= 0 ? '+' : '')}${(v / 100000).toFixed(2)}L  ${sentiment}`;
             }
           }
         }
@@ -306,58 +393,8 @@ function renderCandleChart() {
         y: {
           ticks: { color: '#555', font: { size: 10 }, callback: v => (v >= 0 ? '+' : '') + (v / 100000).toFixed(1) + 'L' },
           grid: { color: 'rgba(255,255,255,0.04)' },
-          // Zero line highlight
-          afterDataLimits(scale) {
-            scale.min = Math.min(scale.min, 0);
-            scale.max = Math.max(scale.max, 0);
-          }
+          afterDataLimits(scale) { scale.min = Math.min(scale.min, 0); scale.max = Math.max(scale.max, 0); }
         }
-      }
-    }
-  });
-
-  // ── Volume Bar Chart ───────────────────────────────────────────────────
-  const volData = candles.map(c => Math.abs(c.close));
-  const volColors = candles.map(c => (c.bullish ? bullColor : bearColor) + 'bb');
-  const volBorders = candles.map(c => c.bullish ? bullColor : bearColor);
-
-  if (volChart) volChart.destroy();
-  volChart = new Chart(document.getElementById('volChart'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Net OI Abs',
-        data: volData,
-        backgroundColor: volColors,
-        borderColor: volBorders,
-        borderWidth: 1,
-        barPercentage: 0.7,
-        categoryPercentage: 0.85,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1e222d', titleColor: '#d1d4dc', bodyColor: '#d1d4dc',
-          borderColor: '#2a2e39', borderWidth: 1,
-          callbacks: {
-            title: (items) => `${items[0].label} (15 Min)`,
-            label: (ctx) => {
-              const i = ctx.dataIndex;
-              const c = candles[i];
-              const fmt = v => (v / 100000).toFixed(2) + 'L';
-              return `Net OI: ${fmt(Math.abs(c.close))} | ${c.bullish ? '▲ Bull' : '▼ Bear'}`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: { ticks: { color: '#555', font: { size: 9 }, maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.04)' } },
-        y: { ticks: { color: '#555', font: { size: 9 }, callback: v => (v / 100000).toFixed(1) + 'L' }, grid: { color: 'rgba(255,255,255,0.04)' } }
       }
     }
   });
