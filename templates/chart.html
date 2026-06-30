@@ -114,12 +114,19 @@ async function loadData() {
     const text = await res.text();
     const lines = text.trim().split('\n');
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g,''));
-    allData = lines.slice(1).map(line => {
+    let parsed = lines.slice(1).map(line => {
       const vals = line.split(',').map(v => v.trim().replace(/"/g,''));
       const obj = {}; headers.forEach((h,i) => obj[h] = vals[i]); return obj;
     }).filter(r => r.Timestamp && r.Strike);
+
+    // Keep only the latest date present in the sheet, so stale historical rows
+    // (e.g. last week's leftover data) never mix into today's charts.
+    const allDates = parsed.map(r => r.Timestamp.split(' ')[0]).filter(Boolean);
+    const latestDate = allDates.length ? allDates.reduce((a,b) => (a > b ? a : b)) : null;
+    allData = latestDate ? parsed.filter(r => r.Timestamp.startsWith(latestDate)) : parsed;
+
     const last = allData[allData.length-1]?.Timestamp?.split(' ')[1]?.slice(0,5) || '-';
-    document.getElementById('status').textContent = `${allData.length} rows | ${last}`;
+    document.getElementById('status').textContent = `${allData.length} rows | ${latestDate || '-'} | ${last}`;
     setupStrikes();
   } catch(e) { document.getElementById('status').textContent = 'Error: ' + e.message; }
 }
