@@ -347,8 +347,8 @@ function renderLineChart() {
           tension: 0.3,
           fill: {
             target: { value: 0 },
-            above: 'rgba(38,166,154,0.15)',   // positive = CE heavy = bullish = green fill
-            below: 'rgba(239,83,80,0.15)',   // negative = PE heavy = bearish = red fill
+            above: 'rgba(38,166,154,0.15)',
+            below: 'rgba(239,83,80,0.15)',
           },
           segment: {
             borderColor: ctx => {
@@ -358,7 +358,6 @@ function renderLineChart() {
           }
         },
         {
-          // Zero line reference
           label: 'Zero',
           data: values.map(() => 0),
           borderColor: 'rgba(255,255,255,0.1)',
