@@ -40,6 +40,18 @@ body { background: #131722; color: #d1d4dc; font-family: sans-serif; padding: 10
 .candle-wrap { position: relative; width: 100%; height: 280px; }
 .vol-wrap { position: relative; width: 100%; height: 100px; margin-top: 4px; }
 .line-wrap { position: relative; width: 100%; height: 220px; margin-top: 4px; }
+
+.analysis-wrap { margin-top: 4px; }
+.analysis-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.analysis-table th { text-align: left; color: #787b86; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid #2a2e39; }
+.analysis-table td { padding: 6px 8px; border-bottom: 1px solid #1a1d27; }
+.analysis-table tr:hover { background: #1a1e29; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+.tag-gradual { background: rgba(38,166,154,0.15); color: #26a69a; }
+.tag-spike { background: rgba(239,83,80,0.15); color: #ef5350; }
+.tag-ce { background: rgba(227,73,72,0.12); color: #e34948; }
+.tag-pe { background: rgba(41,98,255,0.12); color: #2962ff; }
+.no-data { color: #555; font-size: 11px; padding: 10px 8px; }
 </style>
 </head>
 <body>
@@ -79,6 +91,10 @@ body { background: #131722; color: #d1d4dc; font-family: sans-serif; padding: 10
 <div class="section-title" style="border-color:#9b59b6">Net OI — Line Chart &nbsp;<span style="color:#26a69a;font-weight:400">Above 0 = CE Heavy (Bullish)</span> &nbsp;<span style="color:#ef5350;font-weight:400">Below 0 = PE Heavy (Bearish)</span></div>
 <div class="line-wrap"><canvas id="lineChart"></canvas></div>
 
+<!-- Panel 4: OI Pattern Analysis (Gradual Buildup vs Sudden Spike) -->
+<div class="section-title" style="border-color:#f1c40f">OI Pattern Analysis — Gradual Buildup &amp; Sudden Spikes</div>
+<div class="analysis-wrap" id="analysisWrap"></div>
+
 <script>
 const SHEET_ID = '{{ sheet_id }}';
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=Sheet1`;
@@ -111,7 +127,7 @@ async function loadData() {
 function setupStrikes() {
   strikes = [...new Set(allData.map(r => Number(r.Strike)))].sort((a,b)=>a-b);
   if (selected.size === 0) { const mid = strikes[Math.floor(strikes.length/2)]; selected.add(`${mid}_CE`); selected.add(`${mid}_PE`); }
-  buildStrikeList(); updateDropdownLabel(); renderChart(); renderCandleChart(); renderLineChart();
+  buildStrikeList(); updateDropdownLabel(); renderChart(); renderCandleChart(); renderLineChart(); renderOIAnalysis();
 }
 
 function buildStrikeList() {
@@ -131,14 +147,14 @@ function toggleStrike(key) {
   if(selected.has(key)) selected.delete(key); else selected.add(key);
   const cb = document.getElementById('cb-'+key);
   if(cb) cb.className = 'cb' + (selected.has(key)?' checked':'');
-  updateDropdownLabel(); updateSelectAll(); renderChart(); renderCandleChart(); renderLineChart();
+  updateDropdownLabel(); updateSelectAll(); renderChart(); renderCandleChart(); renderLineChart(); renderOIAnalysis();
 }
 
 function toggleAll() {
   const allKeys = []; strikes.forEach(s => { allKeys.push(`${s}_CE`); allKeys.push(`${s}_PE`); });
   const allSelected = allKeys.every(k => selected.has(k));
   if(allSelected) selected.clear(); else allKeys.forEach(k => selected.add(k));
-  buildStrikeList(); updateSelectAll(); updateDropdownLabel(); renderChart(); renderCandleChart(); renderLineChart();
+  buildStrikeList(); updateSelectAll(); updateDropdownLabel(); renderChart(); renderCandleChart(); renderLineChart(); renderOIAnalysis();
 }
 
 function updateSelectAll() {
@@ -397,6 +413,115 @@ function renderLineChart() {
       }
     }
   });
+}
+
+// ─── PANEL 4: OI Pattern Analysis (Gradual Buildup + Sudden Spike) ────────
+// Tunable defaults
+const SPIKE_MULTIPLIER = 3;      // candle change must be 3x rolling avg to count as "sudden spike"
+const SPIKE_WINDOW = 5;          // rolling average computed over last 5 candles
+const MIN_GRADUAL_MINUTES = 15;  // a same-direction run must span at least 15 min to count as "gradual buildup"
+
+function parseTimeToMinutes(label) {
+  // label is "HH:MM"
+  const [h, m] = label.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function analyzeSeries(times, getValue) {
+  // Build clean series: [{label, value}]
+  const series = times.map(t => ({ label: t.split(' ')[1]?.slice(0,5) || t, value: getValue(t) }))
+                       .filter(p => p.value !== null && !isNaN(p.value));
+  if (series.length < 2) return { gradualRuns: [], spikes: [] };
+
+  // ── Gradual buildup: consecutive candles with same-sign change, sustained >= MIN_GRADUAL_MINUTES
+  const gradualRuns = [];
+  let runStart = 0;
+  let runSign = Math.sign(series[0].value) || 0;
+  for (let i = 1; i <= series.length; i++) {
+    const sign = i < series.length ? (Math.sign(series[i].value) || 0) : null;
+    const sameSign = sign === runSign && sign !== 0;
+    if (!sameSign) {
+      const startLabel = series[runStart].label;
+      const endLabel = series[i-1].label;
+      const durationMin = parseTimeToMinutes(endLabel) - parseTimeToMinutes(startLabel);
+      if (durationMin >= MIN_GRADUAL_MINUTES && runSign !== 0 && (i-1) > runStart) {
+        gradualRuns.push({
+          from: startLabel, to: endLabel, durationMin,
+          direction: runSign > 0 ? 'Buildup (Writing)' : 'Unwinding (Covering)',
+          totalChange: series.slice(runStart, i).reduce((s,p)=>s+p.value,0)
+        });
+      }
+      runStart = i;
+      runSign = sign;
+    }
+  }
+
+  // ── Sudden spike: |value| > SPIKE_MULTIPLIER * rolling avg(|prior N values|)
+  const spikes = [];
+  for (let i = SPIKE_WINDOW; i < series.length; i++) {
+    const window = series.slice(i - SPIKE_WINDOW, i).map(p => Math.abs(p.value));
+    const avg = window.reduce((a,b)=>a+b,0) / window.length;
+    const cur = Math.abs(series[i].value);
+    if (avg > 0 && cur > SPIKE_MULTIPLIER * avg) {
+      spikes.push({ time: series[i].label, value: series[i].value, avgBefore: avg });
+    }
+  }
+
+  return { gradualRuns, spikes };
+}
+
+function renderOIAnalysis() {
+  const times = [...new Set(allData.map(r=>r.Timestamp))].sort();
+  const wrap = document.getElementById('analysisWrap');
+  if (!wrap) return;
+
+  const rows = [];
+  strikes.forEach(strike => {
+    ['CE','PE'].forEach(type => {
+      const key = `${strike}_${type}`;
+      if (!selected.has(key)) return;
+      const field = type === 'CE' ? 'CE_Chng_OI' : 'PE_Chng_OI';
+      const getValue = (t) => { const r = allData.find(d => d.Timestamp===t && Number(d.Strike)===strike); return r ? (Number(r[field]) || 0) : null; };
+      const { gradualRuns, spikes } = analyzeSeries(times, getValue);
+
+      gradualRuns.forEach(g => {
+        rows.push({
+          strike, type,
+          pattern: 'gradual', label: g.direction,
+          from: g.from, to: g.to,
+          detail: `${g.durationMin} min | Net: ${(g.totalChange>=0?'+':'')+(g.totalChange/100000).toFixed(2)}L`
+        });
+      });
+      spikes.forEach(s => {
+        rows.push({
+          strike, type,
+          pattern: 'spike', label: s.value >= 0 ? 'Sudden CE/PE Writing Spike' : 'Sudden Unwinding Spike',
+          from: s.time, to: s.time,
+          detail: `${(s.value>=0?'+':'')+(s.value/100000).toFixed(2)}L (avg before: ${(s.avgBefore/100000).toFixed(2)}L)`
+        });
+      });
+    });
+  });
+
+  if (rows.length === 0) {
+    wrap.innerHTML = '<div class="no-data">No gradual buildup or sudden spikes detected yet for selected strikes. Try selecting more strikes or wait for more data.</div>';
+    return;
+  }
+
+  // Sort by time
+  rows.sort((a,b) => parseTimeToMinutes(a.from) - parseTimeToMinutes(b.from));
+
+  let html = '<table class="analysis-table"><thead><tr><th>Strike</th><th>Pattern</th><th>Time Range</th><th>Detail</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    const typeTag = `<span class="tag ${r.type==='CE'?'tag-ce':'tag-pe'}">${r.strike} ${r.type}</span>`;
+    const patternTag = r.pattern === 'gradual'
+      ? `<span class="tag tag-gradual">${r.label}</span>`
+      : `<span class="tag tag-spike">${r.label}</span>`;
+    const timeRange = r.from === r.to ? r.from : `${r.from} → ${r.to}`;
+    html += `<tr><td>${typeTag}</td><td>${patternTag}</td><td>${timeRange}</td><td>${r.detail}</td></tr>`;
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
 }
 
 loadData();
