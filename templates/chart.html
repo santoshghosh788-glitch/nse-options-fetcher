@@ -76,7 +76,7 @@ body { background: #131722; color: #d1d4dc; font-family: sans-serif; padding: 10
 <div class="vol-wrap"><canvas id="volChart"></canvas></div>
 
 <!-- Panel 3: Net OI Line (Murarka Style) -->
-<div class="section-title" style="border-color:#9b59b6">Net OI — Line Chart &nbsp;<span style="color:#26a69a;font-weight:400">Above 0 = PE Heavy (Bullish)</span> &nbsp;<span style="color:#ef5350;font-weight:400">Below 0 = CE Heavy (Bearish)</span></div>
+<div class="section-title" style="border-color:#9b59b6">Net OI — Line Chart &nbsp;<span style="color:#26a69a;font-weight:400">Above 0 = CE Heavy (Bullish)</span> &nbsp;<span style="color:#ef5350;font-weight:400">Below 0 = PE Heavy (Bearish)</span></div>
 <div class="line-wrap"><canvas id="lineChart"></canvas></div>
 
 <script>
@@ -274,7 +274,7 @@ function renderCandleChart() {
             label: (ctx) => {
               const i = ctx.dataIndex; const c = candles[i];
               const fmt = v => (v >= 0 ? '+' : '') + (v / 100000).toFixed(2) + 'L';
-              return [`O: ${fmt(c.open)}`, `H: ${fmt(c.high)}`, `L: ${fmt(c.low)}`, `C: ${fmt(c.close)}`, c.bullish ? '▲ Bullish (PE Heavy)' : '▼ Bearish (CE Heavy)'];
+              return [`O: ${fmt(c.open)}`, `H: ${fmt(c.high)}`, `L: ${fmt(c.low)}`, `C: ${fmt(c.close)}`, c.bullish ? '▲ Bullish (CE Heavy)' : '▼ Bearish (PE Heavy)'];
             }
           }
         }
@@ -347,8 +347,8 @@ function renderLineChart() {
           tension: 0.3,
           fill: {
             target: { value: 0 },
-            above: 'rgba(38,166,154,0.15)',   // positive = bullish = green fill
-            below: 'rgba(239,83,80,0.15)',   // negative = bearish = red fill
+            above: 'rgba(38,166,154,0.15)',   // positive = CE heavy = bullish = green fill
+            below: 'rgba(239,83,80,0.15)',   // negative = PE heavy = bearish = red fill
           },
           segment: {
             borderColor: ctx => {
@@ -382,7 +382,7 @@ function renderLineChart() {
           callbacks: {
             label: ctx => {
               const v = ctx.parsed.y;
-              const sentiment = v >= 0 ? '▲ PE Heavy (Bullish)' : '▼ CE Heavy (Bearish)';
+              const sentiment = v >= 0 ? '▲ CE Heavy (Bullish)' : '▼ PE Heavy (Bearish)';
               return `Net OI: ${(v >= 0 ? '+' : '')}${(v / 100000).toFixed(2)}L  ${sentiment}`;
             }
           }
